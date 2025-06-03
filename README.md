@@ -57,4 +57,4 @@ A Django REST API for personal cash flow management, featuring:
 
 ---
 
-**Made with Django, DRF, and ❤️ by [sahelii](https://github.com/sahelii)** 
+**Made with Django, DRF, and ❤️ by [sahelii](https://github.com/sahelii)**
