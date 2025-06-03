@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework import viewsets
-from .models import Income, Expense
-from .serializers import IncomeSerializer, ExpenseSerializer
+from .models import Income, Expense, Category
+from .serializers import IncomeSerializer, ExpenseSerializer, CategorySerializer
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -13,6 +13,9 @@ from rest_framework import status
 from django.contrib.auth.forms import PasswordResetForm
 from django.conf import settings
 from django.contrib.auth import authenticate
+from collections import defaultdict
+from rest_framework.authtoken.models import Token
+from rest_framework.authtoken.views import ObtainAuthToken
 
 # Create your views here.
 
@@ -22,7 +25,10 @@ class IncomeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Income.objects.filter(user=self.request.user)
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Income.objects.none()
+        return Income.objects.filter(user=user)
 
 class ExpenseViewSet(viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
@@ -30,7 +36,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Expense.objects.filter(user=self.request.user)
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Expense.objects.none()
+        return Expense.objects.filter(user=user)
 
 class PredictCashflowView(APIView):
     authentication_classes = [TokenAuthentication]
@@ -97,7 +106,7 @@ class RegisterView(APIView):
         user = User.objects.create_user(username=username, email=email, password=password)
         from rest_framework.authtoken.models import Token
         token, created = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key}, status=status.HTTP_201_CREATED)
+        return Response({'token': token.key, 'email': user.email}, status=status.HTTP_201_CREATED)
 
 class PasswordResetView(APIView):
     permission_classes = []
@@ -138,3 +147,56 @@ class PasswordUpdateView(APIView):
         user.set_password(new_password)
         user.save()
         return Response({'message': 'Password updated successfully.'}, status=status.HTTP_200_OK)
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    serializer_class = CategorySerializer
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Category.objects.none()
+        return Category.objects.filter(user=user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+class SummaryView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        year = request.query_params.get('year')
+        incomes = Income.objects.filter(user=user)
+        expenses = Expense.objects.filter(user=user)
+        if year:
+            incomes = incomes.filter(date__year=year)
+            expenses = expenses.filter(date__year=year)
+        summary = defaultdict(lambda: {'total_income': 0, 'total_expense': 0})
+        for inc in incomes:
+            month = inc.date.strftime('%Y-%m')
+            summary[month]['total_income'] += float(inc.amount)
+        for exp in expenses:
+            month = exp.date.strftime('%Y-%m')
+            summary[month]['total_expense'] += float(exp.amount)
+        result = []
+        for month in sorted(summary.keys(), reverse=True):
+            total_income = summary[month]['total_income']
+            total_expense = summary[month]['total_expense']
+            result.append({
+                'month': month,
+                'total_income': total_income,
+                'total_expense': total_expense,
+                'net_balance': total_income - total_expense
+            })
+        return Response({'summary': result})
+
+class LoginView(ObtainAuthToken):
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            user = User.objects.get(username=request.data.get('username'))
+            return Response({'token': response.data['token'], 'email': user.email})
+        return response
